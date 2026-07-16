@@ -8,6 +8,11 @@
 A simple desktop **Weather Dashboard** built with **Python** and **Tkinter**. The app retrieves current weather conditions and a 5-day forecast using the Open-Meteo weather API.
 
 ---
+> [!IMPORTANT]
+> Some of the code has been generated with Copilot.
+> I've double-checked it and didn't see any time bombs or random connects to its Microslop overlords but still feel it should be clearly stated.
+
+---
 
 ## Table of Contents
 
