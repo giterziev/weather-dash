@@ -1,19 +1,59 @@
 import tkinter as tk
 from tkinter import messagebox
+from tkinter import ttk
 import requests
 import threading
 from datetime import datetime
+import json
+import os
+import locale
 
 
-
-# API config
+# API CONFIGURATION
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
-
 REQUEST_TIMEOUT = 10
 
 
-# Open-Meteo weather_code values
+# LOCAL APP FILES
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+FAVORITES_FILE = os.path.join(APP_DIR, "weather_favorites.json")
+ICON_FILE = os.path.join(APP_DIR, "weather.ico")
+
+
+# COUNTRY / REGION DEFAULTS
+# Based on OS locale
+DEFAULT_CITY_BY_COUNTRY = {
+    "US": "Pittsburgh",
+    "ES": "Madrid",
+    "GB": "London",
+    "UK": "London",
+    "FR": "Paris",
+    "DE": "Berlin",
+    "IT": "Rome",
+    "PT": "Lisbon",
+    "NL": "Amsterdam",
+    "BE": "Brussels",
+    "PL": "Warsaw",
+    "SE": "Stockholm",
+    "NO": "Oslo",
+    "DK": "Copenhagen",
+    "FI": "Helsinki",
+    "IE": "Dublin",
+    "CA": "Ottawa",
+    "MX": "Mexico City",
+    "BR": "Brasilia",
+    "AR": "Buenos Aires",
+    "AU": "Canberra",
+    "NZ": "Wellington",
+    "JP": "Tokyo",
+    "CN": "Beijing",
+    "IN": "New Delhi",
+    "BG": "Sofia",
+}
+
+
+# WEATHER CODE MAPPING
 WEATHER_CODES = {
     0: ("Clear sky", "☀️"),
     1: ("Mainly clear", "🌤️"),
@@ -46,7 +86,65 @@ WEATHER_CODES = {
 }
 
 
-# API functions
+# HELPER FUNCTIONS
+def get_default_city_from_os_region():
+    """
+    Attempts to choose a default city based on the OS locale.
+    """
+
+    try:
+        current_locale = locale.getlocale()[0]
+
+        if not current_locale:
+            current_locale = locale.getdefaultlocale()[0]
+
+        if current_locale and "_" in current_locale:
+            country_code = current_locale.split("_")[-1].upper()
+            return DEFAULT_CITY_BY_COUNTRY.get(country_code, "Madrid")
+
+    except Exception:
+        pass
+
+    return "Madrid"
+
+
+def load_favorites():
+    """
+    Loads favorite cities from local JSON file.
+    """
+
+    if not os.path.exists(FAVORITES_FILE):
+        return []
+
+    try:
+        with open(FAVORITES_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        if isinstance(data, list):
+            return sorted(set(str(city).strip() for city in data if str(city).strip()))
+
+    except Exception:
+        pass
+
+    return []
+
+
+def save_favorites(favorites):
+    """
+    Saves favorite cities to local JSON file.
+    """
+
+    try:
+        with open(FAVORITES_FILE, "w", encoding="utf-8") as file:
+            json.dump(sorted(set(favorites)), file, indent=4, ensure_ascii=False)
+
+    except Exception as error:
+        messagebox.showerror(
+            "Favorites Error",
+            f"Could not save favorites:\n{error}"
+        )
+
+
 def get_coordinates(city_name):
     """
     Converts a city name into latitude and longitude using Open-Meteo Geocoding API.
@@ -127,15 +225,126 @@ class WeatherDashboard(tk.Tk):
         super().__init__()
 
         self.title("Weather Dashboard")
-        self.geometry("760x620")
-        self.minsize(720, 580)
         self.configure(bg="#101827")
+        self.minsize(720, 580)
 
+        self.window_width = 760
+        self.window_height = 620
+
+        self.favorites = load_favorites()
+
+        self.set_app_icon()
+        self.center_window()
+        self.create_scrollable_layout()
         self.create_widgets()
 
+        self.bind_mousewheel()
+
+        default_city = get_default_city_from_os_region()
+        self.city_entry.insert(0, default_city)
+
+        # Auto-load weather shortly after startup
+        self.after(250, self.search_weather)
+
+    # ICON
+    def set_app_icon(self):
+        """
+        Adds an icon if weather.ico exists in the same folder as the script.
+        """
+
+        if os.path.exists(ICON_FILE):
+            try:
+                self.iconbitmap(ICON_FILE)
+            except Exception:
+                pass
+
+    def center_window(self):
+        """
+        Centers the main app window on startup.
+        """
+
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+
+        x = int((screen_width / 2) - (self.window_width / 2))
+        y = int((screen_height / 2) - (self.window_height / 2))
+
+        self.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
+
+    # LAYOUT
+    def create_scrollable_layout(self):
+        """
+        Creates a scrollable canvas that contains the full dashboard.
+        This solves the issue where the forecast is unreachable on smaller screens.
+        """
+
+        self.canvas = tk.Canvas(
+            self,
+            bg="#101827",
+            highlightthickness=0
+        )
+
+        self.scrollbar = tk.Scrollbar(
+            self,
+            orient="vertical",
+            command=self.canvas.yview
+        )
+
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        self.scrollable_frame = tk.Frame(self.canvas, bg="#101827")
+
+        self.canvas_window = self.canvas.create_window(
+            (0, 0),
+            window=self.scrollable_frame,
+            anchor="nw"
+        )
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            self.update_scroll_region
+        )
+
+        self.canvas.bind(
+            "<Configure>",
+            self.resize_scrollable_frame
+        )
+
+    def update_scroll_region(self, event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def resize_scrollable_frame(self, event):
+        """
+        Keeps the inner frame width equal to the canvas width.
+        This prevents awkward horizontal shrinking.
+        """
+
+        self.canvas.itemconfig(self.canvas_window, width=event.width)
+
+    def bind_mousewheel(self):
+        """
+        Enables mousewheel scrolling.
+        """
+
+        self.canvas.bind_all("<MouseWheel>", self.on_mousewheel)
+        self.canvas.bind_all("<Button-4>", self.on_mousewheel)
+        self.canvas.bind_all("<Button-5>", self.on_mousewheel)
+
+    def on_mousewheel(self, event):
+
+        if event.num == 4:
+            self.canvas.yview_scroll(-1, "units")
+        elif event.num == 5:
+            self.canvas.yview_scroll(1, "units")
+        else:
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    # WIDGETS
     def create_widgets(self):
-        # Main container
-        self.main_frame = tk.Frame(self, bg="#101827")
+        self.main_frame = tk.Frame(self.scrollable_frame, bg="#101827")
         self.main_frame.pack(fill="both", expand=True, padx=24, pady=24)
 
         # Header
@@ -162,7 +371,7 @@ class WeatherDashboard(tk.Tk):
 
         # Search area
         search_frame = tk.Frame(self.main_frame, bg="#101827")
-        search_frame.pack(fill="x", pady=(0, 20))
+        search_frame.pack(fill="x", pady=(0, 12))
 
         self.city_entry = tk.Entry(
             search_frame,
@@ -173,7 +382,6 @@ class WeatherDashboard(tk.Tk):
             relief="flat"
         )
         self.city_entry.pack(side="left", fill="x", expand=True, ipady=12, padx=(0, 12))
-        self.city_entry.insert(0, "Madrid")
 
         search_button = tk.Button(
             search_frame,
@@ -191,6 +399,58 @@ class WeatherDashboard(tk.Tk):
         search_button.pack(side="right")
 
         self.city_entry.bind("<Return>", lambda event: self.search_weather())
+
+        # Favorites area
+        favorites_frame = tk.Frame(self.main_frame, bg="#101827")
+        favorites_frame.pack(fill="x", pady=(0, 18))
+
+        favorites_label = tk.Label(
+            favorites_frame,
+            text="Favorites:",
+            font=("Segoe UI", 10, "bold"),
+            fg="#CBD5E1",
+            bg="#101827"
+        )
+        favorites_label.pack(side="left", padx=(0, 8))
+
+        self.favorites_combo = ttk.Combobox(
+            favorites_frame,
+            values=self.favorites,
+            state="readonly",
+            width=24
+        )
+        self.favorites_combo.pack(side="left", padx=(0, 8))
+        self.favorites_combo.bind("<<ComboboxSelected>>", self.select_favorite)
+
+        add_favorite_button = tk.Button(
+            favorites_frame,
+            text="Add",
+            font=("Segoe UI", 9, "bold"),
+            bg="#22C55E",
+            fg="#052E16",
+            activebackground="#16A34A",
+            activeforeground="#FFFFFF",
+            relief="flat",
+            padx=14,
+            pady=6,
+            command=self.add_favorite
+        )
+        add_favorite_button.pack(side="left", padx=(0, 8))
+
+        remove_favorite_button = tk.Button(
+            favorites_frame,
+            text="Remove",
+            font=("Segoe UI", 9, "bold"),
+            bg="#EF4444",
+            fg="#450A0A",
+            activebackground="#DC2626",
+            activeforeground="#FFFFFF",
+            relief="flat",
+            padx=14,
+            pady=6,
+            command=self.remove_favorite
+        )
+        remove_favorite_button.pack(side="left")
 
         # Status label
         self.status_label = tk.Label(
@@ -213,7 +473,7 @@ class WeatherDashboard(tk.Tk):
 
         self.location_label = tk.Label(
             self.current_card,
-            text="Madrid, Spain",
+            text="Loading location...",
             font=("Segoe UI", 18, "bold"),
             fg="#F8FAFC",
             bg="#1E293B"
@@ -262,7 +522,7 @@ class WeatherDashboard(tk.Tk):
         )
         self.condition_label.pack(anchor="w")
 
-        # Details grid
+        # Weather detail cards
         self.details_frame = tk.Frame(self.current_card, bg="#1E293B")
         self.details_frame.pack(fill="x", padx=22, pady=(0, 22))
 
@@ -282,7 +542,7 @@ class WeatherDashboard(tk.Tk):
         forecast_title.pack(anchor="w", pady=(0, 10))
 
         self.forecast_frame = tk.Frame(self.main_frame, bg="#101827")
-        self.forecast_frame.pack(fill="both", expand=True)
+        self.forecast_frame.pack(fill="both", expand=True, pady=(0, 24))
 
         self.forecast_cards = []
 
@@ -362,6 +622,49 @@ class WeatherDashboard(tk.Tk):
 
         return value
 
+    # FAVORITES
+    def refresh_favorites_combo(self):
+        self.favorites = sorted(set(self.favorites))
+        self.favorites_combo["values"] = self.favorites
+
+    def add_favorite(self):
+        city = self.city_entry.get().strip()
+
+        if not city:
+            messagebox.showwarning("Missing city", "Please enter a city before adding it to favorites.")
+            return
+
+        if city not in self.favorites:
+            self.favorites.append(city)
+            self.refresh_favorites_combo()
+            save_favorites(self.favorites)
+            self.status_label.config(text=f"Added {city} to favorites.")
+        else:
+            self.status_label.config(text=f"{city} is already in favorites.")
+
+    def remove_favorite(self):
+        selected_city = self.favorites_combo.get().strip()
+
+        if not selected_city:
+            messagebox.showwarning("No favorite selected", "Please select a favorite city to remove.")
+            return
+
+        if selected_city in self.favorites:
+            self.favorites.remove(selected_city)
+            self.refresh_favorites_combo()
+            self.favorites_combo.set("")
+            save_favorites(self.favorites)
+            self.status_label.config(text=f"Removed {selected_city} from favorites.")
+
+    def select_favorite(self, event=None):
+        selected_city = self.favorites_combo.get().strip()
+
+        if selected_city:
+            self.city_entry.delete(0, tk.END)
+            self.city_entry.insert(0, selected_city)
+            self.search_weather()
+
+    # WEATHER LOADING
     def search_weather(self):
         city = self.city_entry.get().strip()
 
@@ -381,6 +684,7 @@ class WeatherDashboard(tk.Tk):
     def load_weather_data(self, city):
         try:
             location = get_coordinates(city)
+
             weather_data = get_weather(
                 location["latitude"],
                 location["longitude"]
@@ -435,7 +739,7 @@ class WeatherDashboard(tk.Tk):
         wind_speed = current.get("wind_speed_10m", "--")
         cloud_cover = current.get("cloud_cover", "--")
 
-        update_time = current.get("time", "")
+        update_time = current.get("time", "--")
 
         self.location_label.config(text=f"{city}, {country}")
         self.updated_label.config(text=f"Last updated: {update_time}")
@@ -469,6 +773,9 @@ class WeatherDashboard(tk.Tk):
             card["rain"].config(text=f"Rain: {rain_probability}%")
 
         self.status_label.config(text="Weather data loaded successfully.")
+
+        # Bring scroll position back to top after loading new weather
+        self.canvas.yview_moveto(0)
 
     def show_error(self, message):
         self.status_label.config(text="Error loading weather data.")
