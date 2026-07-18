@@ -31,7 +31,9 @@ A simple desktop **Weather Dashboard** built with **Python** and **Tkinter**. Th
 
 - Current weather overview
 - 5-day forecast
-- Persistant favorites
+- Celsius and Fahrenheit toggle
+- Dark theme and light theme toggle
+- Persistant favorites & configs.
 - OS-region-based default city instead of GPS-based
 
 ---
