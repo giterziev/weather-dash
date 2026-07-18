@@ -167,8 +167,6 @@ Madrid, Spain
 Possible, but unlikely, next features:
 
 - Hourly forecast section
-- Celsius/Fahrenheit switching
-- Light/dark themes
 - System tray support
 - Auto-refresh weather data
 - Search history
