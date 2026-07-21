@@ -32,11 +32,7 @@ DEFAULT_CITY_BY_COUNTRY = {
 
 
 def get_default_city_from_os_region():
-    """
-    Attempts to choose a default city based on the OS locale.
-    
-    """
-
+    """Attempts to choose a default city based on the OS locale."""
     try:
         current_locale = locale.getlocale()[0]
 
