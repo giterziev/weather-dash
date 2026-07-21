@@ -31,6 +31,7 @@ A simple desktop **Weather Dashboard** built with **Python** and **Tkinter**. Th
 
 - Current weather overview
 - 5-day forecast
+- Hourly updates
 - Celsius and Fahrenheit toggle
 - Dark theme and light theme toggle
 - Persistant favorites & configs.
@@ -166,7 +167,6 @@ Madrid, Spain
 
 Possible, but unlikely, next features:
 
-- Hourly forecast section
 - System tray support
 - Auto-refresh weather data
 - Search history
