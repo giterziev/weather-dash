@@ -9,7 +9,8 @@ A simple desktop **Weather Dashboard** built with **Python** and **Tkinter**. Th
 
 ---
 > [!IMPORTANT]
-> Some of the code has been generated with Copilot.
+> Some of the code has been generated with **Copilot**.
+> 
 > I've double-checked it and didn't see any time bombs or random connects to its Microslop overlords but still feel it should be clearly stated.
 
 ---
@@ -32,6 +33,8 @@ A simple desktop **Weather Dashboard** built with **Python** and **Tkinter**. Th
 - Current weather overview
 - 5-day forecast
 - Hourly updates
+- System tray support
+- Auto-refresh weather data
 - Celsius and Fahrenheit toggle
 - Dark theme and light theme toggle
 - Persistant favorites & configs.
@@ -42,7 +45,7 @@ A simple desktop **Weather Dashboard** built with **Python** and **Tkinter**. Th
 ## Requirements
 
 - Python 3.10 or newer recommended
-- Requests library
+- requests, pystray, Pillow libraries
 
 ---
 
@@ -167,8 +170,6 @@ Madrid, Spain
 
 Possible, but unlikely, next features:
 
-- System tray support
-- Auto-refresh weather data
 - Search history
 - Weather alerts
 - Packaged Windows `.exe` using PyInstaller
