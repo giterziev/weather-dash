@@ -1,52 +1,40 @@
 import json
 import os
 
-from .config import FAVORITES_FILE, SETTINGS_FILE
-
+from .config import FAVORITES_FILE, SETTINGS_FILE, DEFAULT_REFRESH_INTERVAL_MINUTES
 
 def load_settings():
     default_settings = {
         "temperature_unit": "celsius",
-        "light_theme": False
+        "light_theme": False,
+        "refresh_interval_minutes": DEFAULT_REFRESH_INTERVAL_MINUTES
     }
-
     if not os.path.exists(SETTINGS_FILE):
         return default_settings
-
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as file:
             settings = json.load(file)
-
         if isinstance(settings, dict):
             default_settings.update(settings)
-
         return default_settings
-
     except Exception:
         return default_settings
-
 
 def save_settings(settings):
     with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
         json.dump(settings, file, indent=4)
 
-
 def load_favorites():
     if not os.path.exists(FAVORITES_FILE):
         return []
-
     try:
         with open(FAVORITES_FILE, "r", encoding="utf-8") as file:
             data = json.load(file)
-
         if isinstance(data, list):
             return sorted(set(str(city).strip() for city in data if str(city).strip()))
-
     except Exception:
         pass
-
     return []
-
 
 def save_favorites(favorites):
     with open(FAVORITES_FILE, "w", encoding="utf-8") as file:

@@ -2,31 +2,19 @@ import requests
 
 from .config import GEOCODING_URL, FORECAST_URL, REQUEST_TIMEOUT
 
-
 def get_coordinates(city_name):
-    """Converts a city name into latitude and longitude using Open-Meteo Geocoding API."""
-
     params = {
         "name": city_name.strip(),
         "count": 1,
         "language": "en",
         "format": "json"
     }
-
-    response = requests.get(
-        GEOCODING_URL,
-        params=params,
-        timeout=REQUEST_TIMEOUT
-    )
+    response = requests.get(GEOCODING_URL, params=params, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
-
     data = response.json()
-
     if "results" not in data or not data["results"]:
         raise ValueError("Location not found. Please try another city name.")
-
     result = data["results"][0]
-
     return {
         "name": result.get("name", city_name),
         "country": result.get("country", ""),
@@ -34,10 +22,7 @@ def get_coordinates(city_name):
         "longitude": result["longitude"]
     }
 
-
 def get_weather(latitude, longitude):
-    """Retrieves current weather, hourly data, and a 5-day forecast from Open-Meteo."""
-
     params = {
         "latitude": latitude,
         "longitude": longitude,
@@ -68,12 +53,6 @@ def get_weather(latitude, longitude):
         "timezone": "auto",
         "forecast_days": 5
     }
-
-    response = requests.get(
-        FORECAST_URL,
-        params=params,
-        timeout=REQUEST_TIMEOUT
-    )
+    response = requests.get(FORECAST_URL, params=params, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
-
     return response.json()

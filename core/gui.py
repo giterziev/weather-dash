@@ -7,10 +7,11 @@ from datetime import datetime
 
 import requests
 
-from .config import ICON_FILE
+from .config import ICON_FILE, REFRESH_INTERVAL_OPTIONS
 from .region import get_default_city_from_os_region
 from .storage import load_settings, save_settings, load_favorites, save_favorites
 from .themes import DARK_THEME, LIGHT_THEME
+from .tray import SystemTrayController
 from .weather_api import get_coordinates, get_weather
 from .weather_codes import WEATHER_CODES
 
@@ -18,7 +19,6 @@ from .weather_codes import WEATHER_CODES
 class WeatherDashboard(tk.Tk):
     def __init__(self):
         super().__init__()
-
         self.title("Weather Dashboard")
         self.window_width = 760
         self.window_height = 620
@@ -26,10 +26,19 @@ class WeatherDashboard(tk.Tk):
 
         self.settings = load_settings()
         self.favorites = load_favorites()
+        self.last_location_text = "Weather Dashboard"
+        self.last_temperature_text = "--"
+        self.last_condition_text = "No weather loaded yet"
+        self.last_updated_text = "--"
+        self.refresh_job = None
+        self.is_quitting = False
+        self.is_restoring_from_tray = False
 
         self.temperature_unit = tk.StringVar(value=self.settings["temperature_unit"])
         self.light_theme_enabled = tk.BooleanVar(value=self.settings["light_theme"])
+        self.refresh_interval_minutes = tk.IntVar(value=int(self.settings.get("refresh_interval_minutes", 15)))
         self.colors = LIGHT_THEME if self.light_theme_enabled.get() else DARK_THEME
+        self.tray_controller = SystemTrayController(self)
 
         self.set_app_icon()
         self.center_window()
@@ -38,9 +47,14 @@ class WeatherDashboard(tk.Tk):
         self.create_widgets()
         self.bind_mousewheel()
 
+        # Prompt to close. Minimize sends to the tray.
+        self.protocol("WM_DELETE_WINDOW", self.on_close_requested)
+        self.bind("<Unmap>", self.on_window_unmap)
+
         default_city = get_default_city_from_os_region()
         self.city_entry.insert(0, default_city)
         self.after(250, self.search_weather)
+        self.schedule_auto_refresh()
 
     def set_app_icon(self):
         if os.path.exists(ICON_FILE):
@@ -59,24 +73,18 @@ class WeatherDashboard(tk.Tk):
     def create_settings_menu(self):
         menu_bar = tk.Menu(self)
         settings_menu = tk.Menu(menu_bar, tearoff=0)
-        settings_menu.add_radiobutton(
-            label="Celsius (°C)",
-            variable=self.temperature_unit,
-            value="celsius",
-            command=self.change_temperature_unit
-        )
-        settings_menu.add_radiobutton(
-            label="Fahrenheit (°F)",
-            variable=self.temperature_unit,
-            value="fahrenheit",
-            command=self.change_temperature_unit
-        )
+        settings_menu.add_radiobutton(label="Celsius (°C)", variable=self.temperature_unit, value="celsius", command=self.change_temperature_unit)
+        settings_menu.add_radiobutton(label="Fahrenheit (°F)", variable=self.temperature_unit, value="fahrenheit", command=self.change_temperature_unit)
         settings_menu.add_separator()
-        settings_menu.add_checkbutton(
-            label="Light theme",
-            variable=self.light_theme_enabled,
-            command=self.change_theme
-        )
+        settings_menu.add_checkbutton(label="Light theme", variable=self.light_theme_enabled, command=self.change_theme)
+        settings_menu.add_separator()
+
+        refresh_menu = tk.Menu(settings_menu, tearoff=0)
+        for minutes in REFRESH_INTERVAL_OPTIONS:
+            label = "Off" if minutes == 0 else f"Every {minutes} minutes"
+            refresh_menu.add_radiobutton(label=label, variable=self.refresh_interval_minutes, value=minutes, command=self.change_refresh_interval)
+        settings_menu.add_cascade(label="Auto-refresh", menu=refresh_menu)
+
         menu_bar.add_cascade(label="Settings", menu=settings_menu)
         self.config(menu=menu_bar)
 
@@ -98,6 +106,17 @@ class WeatherDashboard(tk.Tk):
         current_city = self.city_entry.get().strip() if hasattr(self, "city_entry") else ""
         self.rebuild_interface(current_city)
 
+    def change_refresh_interval(self):
+        self.settings["refresh_interval_minutes"] = int(self.refresh_interval_minutes.get())
+        try:
+            save_settings(self.settings)
+        except Exception as error:
+            messagebox.showerror("Settings Error", f"Could not save settings:\n{error}")
+        self.schedule_auto_refresh(reset=True)
+        minutes = self.refresh_interval_minutes.get()
+        status = "disabled" if minutes == 0 else f"set to every {minutes} minutes"
+        self.status_label.config(text=f"Auto-refresh {status}.")
+
     def rebuild_interface(self, city):
         for widget in self.winfo_children():
             widget.destroy()
@@ -107,6 +126,7 @@ class WeatherDashboard(tk.Tk):
         self.create_scrollable_layout()
         self.create_widgets()
         self.bind_mousewheel()
+        self.protocol("WM_DELETE_WINDOW", self.on_close_requested)
         if city:
             self.city_entry.insert(0, city)
             self.after(150, self.search_weather)
@@ -144,23 +164,8 @@ class WeatherDashboard(tk.Tk):
     def create_widgets(self):
         self.main_frame = tk.Frame(self.scrollable_frame, bg=self.colors["app_bg"])
         self.main_frame.pack(fill="both", expand=True, padx=24, pady=24)
-
-        tk.Label(
-            self.main_frame,
-            text="Weather Dashboard",
-            font=("Segoe UI", 26, "bold"),
-            fg=self.colors["text"],
-            bg=self.colors["app_bg"]
-        ).pack(anchor="w")
-
-        tk.Label(
-            self.main_frame,
-            text="Search any city for current conditions, today's hourly outlook, and a 5-day forecast",
-            font=("Segoe UI", 11),
-            fg=self.colors["muted"],
-            bg=self.colors["app_bg"]
-        ).pack(anchor="w", pady=(4, 18))
-
+        tk.Label(self.main_frame, text="Weather Dashboard", font=("Segoe UI", 26, "bold"), fg=self.colors["text"], bg=self.colors["app_bg"]).pack(anchor="w")
+        tk.Label(self.main_frame, text="Search any city for current conditions, today's hourly outlook, and a 5-day forecast", font=("Segoe UI", 11), fg=self.colors["muted"], bg=self.colors["app_bg"]).pack(anchor="w", pady=(4, 18))
         self.create_search_area()
         self.create_favorites_area()
         self.create_status_label()
@@ -171,127 +176,41 @@ class WeatherDashboard(tk.Tk):
     def create_search_area(self):
         search_frame = tk.Frame(self.main_frame, bg=self.colors["app_bg"])
         search_frame.pack(fill="x", pady=(0, 12))
-        self.city_entry = tk.Entry(
-            search_frame,
-            font=("Segoe UI", 14),
-            bg=self.colors["entry_bg"],
-            fg=self.colors["entry_fg"],
-            insertbackground=self.colors["entry_fg"],
-            relief="flat"
-        )
+        self.city_entry = tk.Entry(search_frame, font=("Segoe UI", 14), bg=self.colors["entry_bg"], fg=self.colors["entry_fg"], insertbackground=self.colors["entry_fg"], relief="flat")
         self.city_entry.pack(side="left", fill="x", expand=True, ipady=12, padx=(0, 12))
-        tk.Button(
-            search_frame,
-            text="Search",
-            font=("Segoe UI", 12, "bold"),
-            bg=self.colors["search_bg"],
-            fg=self.colors["search_fg"],
-            activebackground=self.colors["search_bg"],
-            activeforeground=self.colors["search_fg"],
-            relief="flat",
-            padx=24,
-            pady=10,
-            command=self.search_weather
-        ).pack(side="right")
+        tk.Button(search_frame, text="Search", font=("Segoe UI", 12, "bold"), bg=self.colors["search_bg"], fg=self.colors["search_fg"], activebackground=self.colors["search_bg"], activeforeground=self.colors["search_fg"], relief="flat", padx=24, pady=10, command=self.search_weather).pack(side="right")
         self.city_entry.bind("<Return>", lambda event: self.search_weather())
 
     def create_favorites_area(self):
         favorites_frame = tk.Frame(self.main_frame, bg=self.colors["app_bg"])
         favorites_frame.pack(fill="x", pady=(0, 18))
-        tk.Label(
-            favorites_frame,
-            text="Favorites:",
-            font=("Segoe UI", 10, "bold"),
-            fg=self.colors["soft_text"],
-            bg=self.colors["app_bg"]
-        ).pack(side="left", padx=(0, 8))
+        tk.Label(favorites_frame, text="Favorites:", font=("Segoe UI", 10, "bold"), fg=self.colors["soft_text"], bg=self.colors["app_bg"]).pack(side="left", padx=(0, 8))
         self.favorites_combo = ttk.Combobox(favorites_frame, values=self.favorites, state="readonly", width=24)
         self.favorites_combo.pack(side="left", padx=(0, 8))
         self.favorites_combo.bind("<<ComboboxSelected>>", self.select_favorite)
-        tk.Button(
-            favorites_frame,
-            text="Add",
-            font=("Segoe UI", 9, "bold"),
-            bg=self.colors["add_bg"],
-            fg=self.colors["add_fg"],
-            relief="flat",
-            padx=14,
-            pady=6,
-            command=self.add_favorite
-        ).pack(side="left", padx=(0, 8))
-        tk.Button(
-            favorites_frame,
-            text="Remove",
-            font=("Segoe UI", 9, "bold"),
-            bg=self.colors["remove_bg"],
-            fg=self.colors["remove_fg"],
-            relief="flat",
-            padx=14,
-            pady=6,
-            command=self.remove_favorite
-        ).pack(side="left")
+        tk.Button(favorites_frame, text="Add", font=("Segoe UI", 9, "bold"), bg=self.colors["add_bg"], fg=self.colors["add_fg"], relief="flat", padx=14, pady=6, command=self.add_favorite).pack(side="left", padx=(0, 8))
+        tk.Button(favorites_frame, text="Remove", font=("Segoe UI", 9, "bold"), bg=self.colors["remove_bg"], fg=self.colors["remove_fg"], relief="flat", padx=14, pady=6, command=self.remove_favorite).pack(side="left")
 
     def create_status_label(self):
-        self.status_label = tk.Label(
-            self.main_frame,
-            text="Ready",
-            font=("Segoe UI", 10),
-            fg=self.colors["muted"],
-            bg=self.colors["app_bg"]
-        )
+        self.status_label = tk.Label(self.main_frame, text="Ready", font=("Segoe UI", 10), fg=self.colors["muted"], bg=self.colors["app_bg"])
         self.status_label.pack(anchor="w", pady=(0, 12))
 
     def create_current_weather_card(self):
-        self.current_card = tk.Frame(
-            self.main_frame,
-            bg=self.colors["card_bg"],
-            highlightbackground=self.colors["border"],
-            highlightthickness=1
-        )
+        self.current_card = tk.Frame(self.main_frame, bg=self.colors["card_bg"], highlightbackground=self.colors["border"], highlightthickness=1)
         self.current_card.pack(fill="x", pady=(0, 20))
-        self.location_label = tk.Label(
-            self.current_card,
-            text="Loading location...",
-            font=("Segoe UI", 18, "bold"),
-            fg=self.colors["text"],
-            bg=self.colors["card_bg"]
-        )
+        self.location_label = tk.Label(self.current_card, text="Loading location...", font=("Segoe UI", 18, "bold"), fg=self.colors["text"], bg=self.colors["card_bg"])
         self.location_label.pack(anchor="w", padx=22, pady=(20, 4))
-        self.updated_label = tk.Label(
-            self.current_card,
-            text="Last updated: --",
-            font=("Segoe UI", 9),
-            fg=self.colors["muted"],
-            bg=self.colors["card_bg"]
-        )
+        self.updated_label = tk.Label(self.current_card, text="Last updated: --", font=("Segoe UI", 9), fg=self.colors["muted"], bg=self.colors["card_bg"])
         self.updated_label.pack(anchor="w", padx=22)
         current_content = tk.Frame(self.current_card, bg=self.colors["card_bg"])
         current_content.pack(fill="x", padx=22, pady=20)
-        self.icon_label = tk.Label(
-            current_content,
-            text="☀️",
-            font=("Segoe UI Emoji", 52),
-            fg=self.colors["text"],
-            bg=self.colors["card_bg"]
-        )
+        self.icon_label = tk.Label(current_content, text="☀️", font=("Segoe UI Emoji", 52), fg=self.colors["text"], bg=self.colors["card_bg"])
         self.icon_label.pack(side="left", padx=(0, 20))
         temp_frame = tk.Frame(current_content, bg=self.colors["card_bg"])
         temp_frame.pack(side="left", fill="both", expand=True)
-        self.temperature_label = tk.Label(
-            temp_frame,
-            text="--",
-            font=("Segoe UI", 44, "bold"),
-            fg=self.colors["text"],
-            bg=self.colors["card_bg"]
-        )
+        self.temperature_label = tk.Label(temp_frame, text="--", font=("Segoe UI", 44, "bold"), fg=self.colors["text"], bg=self.colors["card_bg"])
         self.temperature_label.pack(anchor="w")
-        self.condition_label = tk.Label(
-            temp_frame,
-            text="Search for a location",
-            font=("Segoe UI", 15),
-            fg=self.colors["soft_text"],
-            bg=self.colors["card_bg"]
-        )
+        self.condition_label = tk.Label(temp_frame, text="Search for a location", font=("Segoe UI", 15), fg=self.colors["soft_text"], bg=self.colors["card_bg"])
         self.condition_label.pack(anchor="w")
         self.details_frame = tk.Frame(self.current_card, bg=self.colors["card_bg"])
         self.details_frame.pack(fill="x", padx=22, pady=(0, 22))
@@ -303,110 +222,39 @@ class WeatherDashboard(tk.Tk):
     def create_detail_card(self, label_text, value_text):
         card = tk.Frame(self.details_frame, bg=self.colors["detail_bg"])
         card.pack(side="left", fill="x", expand=True, padx=5)
-        tk.Label(
-            card,
-            text=label_text,
-            font=("Segoe UI", 9),
-            fg=self.colors["muted"],
-            bg=self.colors["detail_bg"]
-        ).pack(anchor="w", padx=12, pady=(10, 2))
-        value = tk.Label(
-            card,
-            text=value_text,
-            font=("Segoe UI", 13, "bold"),
-            fg=self.colors["text"],
-            bg=self.colors["detail_bg"]
-        )
+        tk.Label(card, text=label_text, font=("Segoe UI", 9), fg=self.colors["muted"], bg=self.colors["detail_bg"]).pack(anchor="w", padx=12, pady=(10, 2))
+        value = tk.Label(card, text=value_text, font=("Segoe UI", 13, "bold"), fg=self.colors["text"], bg=self.colors["detail_bg"])
         value.pack(anchor="w", padx=12, pady=(0, 10))
         return value
 
     def create_hourly_forecast_section(self):
-        tk.Label(
-            self.main_frame,
-            text="Hourly Forecast - Today",
-            font=("Segoe UI", 17, "bold"),
-            fg=self.colors["text"],
-            bg=self.colors["app_bg"]
-        ).pack(anchor="w", pady=(0, 10))
-
+        tk.Label(self.main_frame, text="Hourly Forecast - Today", font=("Segoe UI", 17, "bold"), fg=self.colors["text"], bg=self.colors["app_bg"]).pack(anchor="w", pady=(0, 10))
         self.hourly_frame = tk.Frame(self.main_frame, bg=self.colors["app_bg"])
         self.hourly_frame.pack(fill="x", pady=(0, 22))
         self.hourly_cards = []
-
         for index in range(8):
             row = index // 4
             column = index % 4
-            card = tk.Frame(
-                self.hourly_frame,
-                bg=self.colors["card_bg"],
-                highlightbackground=self.colors["border"],
-                highlightthickness=1
-            )
+            card = tk.Frame(self.hourly_frame, bg=self.colors["card_bg"], highlightbackground=self.colors["border"], highlightthickness=1)
             card.grid(row=row, column=column, sticky="nsew", padx=5, pady=5)
             self.hourly_frame.columnconfigure(column, weight=1)
-
-            time_label = tk.Label(
-                card,
-                text="--:--",
-                font=("Segoe UI", 10, "bold"),
-                fg=self.colors["text"],
-                bg=self.colors["card_bg"]
-            )
+            time_label = tk.Label(card, text="--:--", font=("Segoe UI", 10, "bold"), fg=self.colors["text"], bg=self.colors["card_bg"])
             time_label.pack(pady=(10, 2))
-
-            icon_label = tk.Label(
-                card,
-                text="☁️",
-                font=("Segoe UI Emoji", 22),
-                fg=self.colors["text"],
-                bg=self.colors["card_bg"]
-            )
+            icon_label = tk.Label(card, text="☁️", font=("Segoe UI Emoji", 22), fg=self.colors["text"], bg=self.colors["card_bg"])
             icon_label.pack()
-
-            temp_label = tk.Label(
-                card,
-                text="--",
-                font=("Segoe UI", 11, "bold"),
-                fg=self.colors["soft_text"],
-                bg=self.colors["card_bg"]
-            )
+            temp_label = tk.Label(card, text="--", font=("Segoe UI", 11, "bold"), fg=self.colors["soft_text"], bg=self.colors["card_bg"])
             temp_label.pack(pady=(2, 2))
-
-            rain_label = tk.Label(
-                card,
-                text="Rain: --",
-                font=("Segoe UI", 9),
-                fg=self.colors["muted"],
-                bg=self.colors["card_bg"]
-            )
+            rain_label = tk.Label(card, text="Rain: --", font=("Segoe UI", 9), fg=self.colors["muted"], bg=self.colors["card_bg"])
             rain_label.pack(pady=(0, 10))
-
-            self.hourly_cards.append({
-                "time": time_label,
-                "icon": icon_label,
-                "temp": temp_label,
-                "rain": rain_label,
-            })
+            self.hourly_cards.append({"time": time_label, "icon": icon_label, "temp": temp_label, "rain": rain_label})
 
     def create_forecast_section(self):
-        tk.Label(
-            self.main_frame,
-            text="5-Day Forecast",
-            font=("Segoe UI", 17, "bold"),
-            fg=self.colors["text"],
-            bg=self.colors["app_bg"]
-        ).pack(anchor="w", pady=(0, 10))
+        tk.Label(self.main_frame, text="5-Day Forecast", font=("Segoe UI", 17, "bold"), fg=self.colors["text"], bg=self.colors["app_bg"]).pack(anchor="w", pady=(0, 10))
         self.forecast_frame = tk.Frame(self.main_frame, bg=self.colors["app_bg"])
         self.forecast_frame.pack(fill="both", expand=True, pady=(0, 24))
         self.forecast_cards = []
-
         for _ in range(5):
-            card = tk.Frame(
-                self.forecast_frame,
-                bg=self.colors["card_bg"],
-                highlightbackground=self.colors["border"],
-                highlightthickness=1
-            )
+            card = tk.Frame(self.forecast_frame, bg=self.colors["card_bg"], highlightbackground=self.colors["border"], highlightthickness=1)
             card.pack(side="left", fill="both", expand=True, padx=5)
             day_label = tk.Label(card, text="--", font=("Segoe UI", 11, "bold"), fg=self.colors["text"], bg=self.colors["card_bg"])
             day_label.pack(pady=(16, 6))
@@ -481,6 +329,10 @@ class WeatherDashboard(tk.Tk):
         thread = threading.Thread(target=self.load_weather_data, args=(city,), daemon=True)
         thread.start()
 
+    def manual_refresh_weather(self):
+        if hasattr(self, "city_entry") and self.city_entry.get().strip():
+            self.search_weather()
+
     def load_weather_data(self, city):
         try:
             location = get_coordinates(city)
@@ -524,14 +376,21 @@ class WeatherDashboard(tk.Tk):
         self.update_hourly_forecast(weather_data)
         self.update_daily_forecast(daily)
 
+        self.last_location_text = f"{city}, {country}"
+        self.last_temperature_text = self.format_temperature(temperature)
+        self.last_condition_text = condition
+        self.last_updated_text = datetime.now().strftime("%H:%M")
+        self.tray_controller.update_tooltip()
+
         self.status_label.config(text="Weather data loaded successfully.")
         self.canvas.yview_moveto(0)
+        self.schedule_auto_refresh(reset=True)
 
     def update_hourly_forecast(self, weather_data):
         """
         Shows the next 8 available hourly forecast entries starting from the
         API-reported current local time for the selected weather location.
-        
+
         """
         current = weather_data.get("current", {})
         hourly = weather_data.get("hourly", {})
@@ -593,6 +452,69 @@ class WeatherDashboard(tk.Tk):
             card["icon"].config(text=forecast_icon)
             card["temp"].config(text=f"{self.format_temperature(max_temp)} / {self.format_temperature(min_temp)}")
             card["rain"].config(text=f"Rain: {rain_probability}%")
+
+    def schedule_auto_refresh(self, reset=False):
+        if reset and self.refresh_job is not None:
+            self.after_cancel(self.refresh_job)
+            self.refresh_job = None
+        minutes = int(self.refresh_interval_minutes.get())
+        if minutes <= 0:
+            return
+        milliseconds = minutes * 60 * 1000
+        self.refresh_job = self.after(milliseconds, self.run_auto_refresh)
+
+    def run_auto_refresh(self):
+        self.refresh_job = None
+        if hasattr(self, "city_entry") and self.city_entry.get().strip():
+            self.search_weather()
+        self.schedule_auto_refresh(reset=True)
+
+    def get_tray_tooltip(self):
+        return f"{self.last_location_text}\n{self.last_temperature_text} - {self.last_condition_text}\nUpdated: {self.last_updated_text}"
+
+    def on_window_unmap(self, event):
+        # Minimizing should send the app to the tray.
+        if event.widget == self and not self.is_quitting and not self.is_restoring_from_tray:
+            try:
+                if self.state() == "iconic":
+                    self.hide_to_tray()
+            except tk.TclError:
+                pass
+
+    def on_close_requested(self):
+        choice = messagebox.askyesno(
+            "Close Weather Dashboard?",
+            "Do you want to exit the app?"
+        )
+
+        if choice is True:
+            self.quit_application()
+        elif choice is False:
+            pass
+
+    def hide_to_tray(self):
+        self.tray_controller.start()
+        self.withdraw()
+
+    def show_from_tray(self):
+        self.is_restoring_from_tray = True
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        self.focus_force()
+        self.tray_controller.stop()
+        self.after(300, self.clear_restore_flag)
+
+    def clear_restore_flag(self):
+        self.is_restoring_from_tray = False
+
+    def quit_application(self):
+        self.is_quitting = True
+        if self.refresh_job is not None:
+            self.after_cancel(self.refresh_job)
+            self.refresh_job = None
+        self.tray_controller.stop()
+        self.destroy()
 
     def show_error(self, message):
         self.status_label.config(text="Error loading weather data.")

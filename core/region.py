@@ -1,6 +1,5 @@
 import locale
 
-
 DEFAULT_CITY_BY_COUNTRY = {
     "US": "Pittsburgh",
     "ES": "Madrid",
@@ -30,20 +29,14 @@ DEFAULT_CITY_BY_COUNTRY = {
     "BG": "Sofia",
 }
 
-
 def get_default_city_from_os_region():
-    """Attempts to choose a default city based on the OS locale."""
     try:
         current_locale = locale.getlocale()[0]
-
         if not current_locale:
             current_locale = locale.getdefaultlocale()[0]
-
         if current_locale and "_" in current_locale:
             country_code = current_locale.split("_")[-1].upper()
             return DEFAULT_CITY_BY_COUNTRY.get(country_code, "Madrid")
-
     except Exception:
         pass
-
     return "Madrid"
